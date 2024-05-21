@@ -1,0 +1,262 @@
+---
+title: "Homework_4"
+output: html_document
+date: "2023-12-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Homework 4:Structural Topic Modeling
+
+```{r load packages}
+library(knitr)
+library(LDAvis)
+library(readr)
+library(tidyverse)
+library(quanteda) # quantitative analysis of textual data  (https://quanteda.io/articles/quickstart.html)
+library(quanteda.textplots) # complementary to quanteda, for visualization
+library(tidytext) #conversion of text to and from tidy formats
+library(cld3) # for language detection
+library(servr) # will be used for visualization
+library(topicmodels) # implementation of Latent Dirichlet Allocation, several topic models included
+library(lda) # alternative to topicmodels, implementation of LDA only
+library(stm) # for structural topic modeling
+library(dplyr)
+library(ggplot2)
+library(textstem)
+library(readr)
+
+set.seed(5528) # set seed for reproductibility
+PATH = "~/seminar5"
+setwd(PATH)
+
+```
+### a) Load Data
+```{r Load & inspect data}
+data <- load(file.path(PATH, "data/hoc_speeches.Rdata"))
+# Count of unique values for categorical columns
+speeches %>% summarise(
+  unique_names = n_distinct(name),
+  unique_parties = n_distinct(party),
+  unique_genders = n_distinct(gender)
+)
+
+```
+### (b) Summary Statistics
+
+```{r summary statistics}
+# Basic summary of each column
+summary(speeches)
+```
+
+```{r}
+# Summary for categorical variables
+speeches %>%
+  group_by(gender) %>%
+  summarise(count = n(), avg_ntoken = mean(ntoken))
+```
+
+```{r}
+speeches %>%
+  group_by(party) %>%
+  summarise(count = n(), avg_ntoken = mean(ntoken))
+
+```
+### (c) Turn data into coprus object
+```{r corpus}
+corpus_speeches <- quanteda::corpus(speeches$speech)
+
+summary(corpus_speeches)
+```
+
+### plotting more advanced statistics
+```{r}
+ggplot(speeches, aes(x = ntoken)) +
+  geom_histogram(binwidth = 50, fill = "blue", color = "black") +
+  labs(title = "Distribution of Speech Lengths", x = "Number of Tokens", y = "Frequency")
+
+```
+
+```{r}
+# Boxplot for speech length by gender
+ggplot(speeches, aes(x = gender, y = ntoken, fill = gender)) +
+  geom_boxplot() +
+  labs(title = "Speech Length by Gender", x = "Gender", y = "Number of Tokens")
+```
+```{r}
+# Boxplot for speech length by party
+ggplot(speeches, aes(x = party, y = ntoken, fill = party)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Speech Length by Party", x = "Party", y = "Number of Tokens")
+```
+
+### (d) Turn this corpus into a tokens object and then into a document-feature matrix
+```{r}
+# Tokenizing the corpus
+tokens_speeches <- quanteda::tokens(corpus_speeches, remove_punct = TRUE, remove_numbers = TRUE)
+
+# build the document-feature matrix
+dfm_speeches <- dfm(tokens_speeches)
+
+#plotfrequency
+textplot_wordcloud(dfm_speeches, random_order = FALSE, rotation = 0.25, 
+    color = RColorBrewer::brewer.pal(8, "Dark2"))
+
+```
+
+### stopwords and punctuation
+```{r}
+head(stopwords("en"), 50)
+
+#stopwords
+custom_stopwords <- read_csv(("data/list_stopwords.csv"), col_types = cols(X1 = col_skip()))
+head(custom_stopwords,5)
+
+custom_stopwords <- c(custom_stopwords$stop_words,stopwords("en"), 'also', 'may','can')
+
+dfm_speechescorpus <- corpus_speeches %>%
+                      quanteda::tokens(remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE) %>%
+                      quanteda::tokens_remove(custom_stopwords) %>%
+                      quanteda::tokens_wordstem() %>%
+                      quanteda::tokens_ngrams(n = c(1, 2)) %>%
+                      dfm() %>%
+                      dfm_tolower() %>%
+                      dfm_trim(min_termfreq = 5, min_docfreq = 0.0025, docfreq_type = "prop")
+                            
+dfm_speechescorpus
+
+```
+```{r}
+textplot_wordcloud(dfm_speechescorpus, random_order = FALSE, rotation = 0.25, 
+    color = RColorBrewer::brewer.pal(8, "Dark2"),max_words =100,max_size = 3)
+```
+
+### (e & f) Run the STM
+```{r tokens object}
+set.seed(123)
+stm_model = stm(dfm_speechescorpus, K = 20, max.em.its = 100, prevalence = ~ gender, data = speeches)
+
+```
+
+### (g) Plot STM
+```{r plot}
+plot(stm_model)
+```
+
+### (g) Examine top words from each topic
+```{r examine}
+# Examine the top words from each topic
+topic_labels <- labelTopics(stm_model)
+
+# Print the top words for each topic
+print(topic_labels$prob)
+
+```
+```{r}
+topic_descriptions <- c(
+  "Parliamentary Questions",
+  "Legislative Process",
+  "Financial Institutions and Trade",
+  "Parliamentary Membership and Speeches",
+  "Parliamentary Terms and Rights",
+  "Industry and Business",
+  "Local Government and Education",
+  "Public Concerns and Housing",
+  "Local Investments and Environmental Issues",
+  "International Relations and United Kingdom",
+  "Governmental Statements and Operations",
+  "Law, Justice, and Crime",
+  "Government Finance and Taxation",
+  "Political Parties and Elections",
+  "Parliamentary Etiquette and Issues",
+  "Employment and Labor Market",
+  "Healthcare Services and Regional Governance",
+  "Executive Governance and Negotiations",
+  "Parliamentary Reporting and Committees",
+  "Family, Gender, and Childhood"
+)
+
+```
+
+### find top 3 documents associated with each topic
+```{r, top 3}
+
+K <- ncol(stm_model$theta)
+cat("Number of topics:", K, "\n")
+
+top_docs <- list()
+for (k in 1:K) {
+  topic_proportions <- stm_model$theta[, k]
+  ordered_docs <- order(topic_proportions, decreasing = TRUE)[1:3]
+  cat("Topic", k, "top docs:", ordered_docs, "\n")
+  top_docs[[k]] <- ordered_docs
+}
+
+print(top_docs)
+```
+
+### Report top speeches for one selected topic
+```{r}
+topic_number <- 20
+
+top_documents_indices <- order(stm_model$theta[, topic_number], decreasing = TRUE)[1:3]
+
+top_speeches <- speeches$speech[top_documents_indices]
+
+print(paste("Top speeches for topic", topic_number, ":"))
+print(top_speeches)
+
+```
+### (h) Estimate the Effect of MP Gender on Topic Usage
+(h) Use the estimateEffect and plot.estimateEffect functions in the stm package to estimate the effect of MP gender on topic usage. On which topics are women, on average, more active? 
+
+### Answer:
+Looking at the plots, we can see that the confidence interval for topic 18, Executive Governance and Negotiations, lies to the left side of the 0 line (a vertical line drawn at the 0 point on the x-axis, which represents no difference in topic prevalence between females and males) and does not cross it. This suggests that the effect is statistically significant and has stronger associations with males.
+
+Further inspecting the plots, we can see that the dots to the right of the center (0) suggests that the topic is more prevalent in documents associated with female, although not statistically significant. The topics below show stronger prevalence with women and, on average, are more active with women:
+"Legislative Process"                         "Financial Institutions and Trade"           
+"Parliamentary Membership and Speeches"       "Parliamentary Terms and Rights"             
+"Industry and Business"                       "Local Government and Education"             
+"International Relations and United Kingdom"  "Political Parties and Elections"            
+"Parliamentary Etiquette and Issues"          "Employment and Labor Market"                
+"Healthcare Services and Regional Governance" "Parliamentary Reporting and Committees"    
+
+
+```{r estimate effect}
+effect_model = estimateEffect(formula = ~ gender, stmobj = stm_model, metadata = speeches)
+
+dev.new(width = 17, height = 15)
+
+plot.estimateEffect(effect_model, covariate = "gender", 
+                    labeltype = "custom", 
+                    custom.labels = stm_model$topics, 
+                    xaxt = "n", 
+                    cex.axis = 0.7, 
+                    main = "Effect of Gender on Topic Prevalence")
+
+```
+
+```{r}
+
+dev.new(width = 17, height = 15)
+
+par(cex.axis = 0.7,  # Smaller axis text
+    cex.lab = 0.7,   # Smaller x and y labels
+    cex.main = 0.8)  # Slightly smaller main title
+
+plot(effect_model, "gender", model=stm_model, method="difference",
+     cov.value1="female", cov.value2="male")
+
+```
+
+```{r}
+#topics with dots on the right of the zero line
+selected_topics <- c(2, 3, 4, 5, 6, 7, 10, 14, 15, 16, 17, 19)
+
+selected_labels <- topic_descriptions[selected_topics]
+
+selected_labels
+```
